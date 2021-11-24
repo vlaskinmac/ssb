@@ -7,7 +7,9 @@ from ssbbot.models import Profile, Stuff
 import logging
 import random
 import os
-import uuid
+import time
+from datetime import date, timedelta
+from pytimeparse import parse
 import pyqrcode
 #from geopy.distance import geodesic as GD
 
@@ -33,7 +35,21 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-CHOICE, QUANTITY, TITLE, SEASONAL, PERIOD, BOOK, SURNAME, CONTACT, PASSPORT, PAYMENT, CONFIRM = range(11)
+(
+    START, 
+    CHOICE, 
+    QUANTITY, 
+    TITLE, 
+    SEASONAL, 
+    PERIOD, 
+    BOOK, 
+    PD,
+    SURNAME, 
+    CONTACT, 
+    PASSPORT, 
+    PAYMENT, 
+    CONFIRM
+ ) = range(13)
 
 
 prices = {
@@ -85,6 +101,19 @@ prices = {
         },
 }
 
+periods = {
+        '1 неделя': 7,
+        '2 недели': 14,
+        '3 недели': 21,
+        '1 месяц': 31,
+        '2 месяца': 61,
+        '3 месяца': 92,
+        '4 месяца': 122,
+        '5 месяцев': 153,
+        '6 месяцев': 184,
+        }
+   
+
 # БОТ - начало
 def start(update: Update, context: CallbackContext) -> int:
     user = update.effective_user
@@ -96,12 +125,6 @@ def start(update: Update, context: CallbackContext) -> int:
                      [ 'ул. Свободы, д. 21'], 
                      ['Волгоградский пр, д. 69/1'],
                      ['Крутицкая наб, д. 11']]
-
-    profile, _ = Profile.objects.get_or_create(external_id=update.message.chat_id)
-    logger.info(f'Get profile {profile}')
-    profile.username = user.username or ''
-    profile.first_name = user.first_name or ''
-    profile.save()
 
     update.message.reply_text('Выберите склад:',
         reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True,
@@ -146,14 +169,16 @@ def seasonal(update: Update, context: CallbackContext) -> int:
     user = update.message.from_user
     logger.info("choice of %s, %s: %s", user.first_name,
                 user.id, update.message.text)
+    reply_keyboard = [['1','2','3','4','5'],['6','7','8','9','10']]
     update.message.reply_text(
         'Ок! Cтоимость хранения в неделю/месяц:\n'
         '1 лыжи - 100 р/неделя или 300 р/мес\n'
-        'сноуборд - 100 р/неделя или 300 р/мес\n'
+        '1 сноуборд - 100 р/неделя или 300 р/мес\n'
         '4 колеса - 200 р/мес\n'
         '1 велосипед - 150 р/ неделя или 400 р/мес\n'
-        'Напишите количество вещей для хранения',
-        reply_markup=ReplyKeyboardRemove(),
+        'Укажите количество вещей для хранения, нажав кнопку, или напишите число в поле ввода.',
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True,
+                                         resize_keyboard=True),
         )
     return QUANTITY
 
@@ -181,30 +206,75 @@ def period(update: Update, context):
     period = context.user_data.get('Период')
     total_price = int(quantity) * prices[item][period]
     
-    update.message.reply_text(f'Проверьте детали вашего заказа: {storage}\n' 
-                                f'вещь - {item}, количество - {quantity}, период - {period}.\n'
-                                 f'Стоимость хранения составит: {total_price} руб.\n'
-                                 'Бронируем?\n'
-                                 'Если передумали - начните сначала, нажав /start',
+    update.message.reply_text(f'Проверьте детали вашего заказа: {storage} - {item}, ' 
+                                f'количество - {quantity}, период - {period}.\n'
+                                 f'Стоимость хранения составит: {total_price} руб.\n\n'
+                                 'Бронируем?'
+                                 'Если хотите начать заново - нажмите /start.',
                               reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True,
                                                                one_time_keyboard=True))
     return BOOK
 
 def book(update, context):
     user_input = update.effective_message.text
+    user = update.effective_user
     if user_input == 'Забронировать':
-        profile = Profile.objects.get(external_id=update.message.chat_id)
-        print(f'sur {profile.last_name}')
+        try:
+            Profile.objects.get(external_id=update.message.chat_id)
+            reply_keyboard = [['Оплатить']]
+            update.message.reply_text(
+                f' {user.first_name}, вы уже у нас зарегистрированы, рад видеть вас снова! '
+                ' Для оплаты нажмите кнопку ниже:',
+                reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True, one_time_keyboard=True)
+            )
+            return CONFIRM
+        except:
+            update.message.reply_text(
+                f' {user.first_name}, вы у нас впервые? Давайте зарегистрируемся.',
+            )
+            profile = Profile.objects.get_or_create(external_id=update.message.chat_id)
+            logger.info(f'Get profile {profile}')
+            profile.username = user.username or ''
+            profile.first_name = user.first_name or ''
+            profile.save()
+            with open("pd.pdf", 'rb') as file:
+                context.bot.send_document(chat_id=update.message.chat_id, document=file)
+            reply_keyboard = [['Принять', 'Отказаться']]
+            update.message.reply_text(
+            text='Для заказа нужно ваше согласие на обработку персональных данных',
+            reply_markup=ReplyKeyboardMarkup(
+                reply_keyboard, one_time_keyboard=True, resize_keyboard=True
+            ),
+        )
+            return PD
+
+def add_pd(update, context):
+    profile =  Profile.objects.get(external_id=update.message.chat_id)
+    answer = update.message.text
+    if answer == 'Принять':
+        update.message.reply_text(
+            f'Добавлено согласие на обработку данных.',
+        )
+        logger.info(f'Пользователю {profile.external_id}'
+                    f'Добавлено согласие на обработку данных')
         if not profile.last_name:
             update.message.reply_text(
-            text='Напишите, пожалуйста, вашу фамилию.',
-        )
+                text='Напишите, пожалуйста, вашу фамилию.',
+            )
             return SURNAME
-        else:
-            return CONTACT
-
-
-
+    elif answer == 'Отказаться':
+        with open("pd.pdf", 'rb') as file:
+            context.bot.send_document(chat_id=update.message.chat_id, document=file)
+        reply_keyboard = [['Принять', 'Отказаться']]
+        update.message.reply_text(
+            text='Извините, без согласия на обработку данных заказы невозможны.',
+            reply_markup=ReplyKeyboardMarkup(
+                reply_keyboard, one_time_keyboard=True, resize_keyboard=True
+            ),
+        )
+        return PD
+        
+ 
 def add_surname(update, context):
     profile = Profile.objects.get(external_id=update.message.chat_id)
     profile.last_name = update.message.text
@@ -212,7 +282,6 @@ def add_surname(update, context):
     update.message.reply_text(
         f'Добавлена фамилия: {profile.last_name}',
     )
-
     update.message.reply_text(
         text='Напишите, пожалуйста, телефон для связи.',
         )
@@ -239,7 +308,6 @@ def add_passport(update, context):
     update.message.reply_text(
         f'Добавлен паспорт: {profile.passport}',
     )
-
     update.message.reply_text(
             text='Напишите, пожалуйста, дату рождения.',
         )
@@ -266,13 +334,21 @@ def confirm(update, context):
     user_input = update.effective_message.text
     if user_input == 'Оплатить':
         url=pyqrcode.create(update.message.chat_id)
-        filename = f'{update.message.chat_id}qr.png'
-        url.png(filename,scale=15)
+        timestr = time.strftime("%Y%m%d-%H%M%S")
+        filename = f'{update.message.chat_id}_{timestr}.png'
+        images_dir = os.path.join(os.getcwd(), 'QR')
+        os.makedirs(images_dir, exist_ok=True)
+        filepath = os.path.join(images_dir, filename)
+        url.png(filepath,scale=15)
         profile = Profile.objects.get(external_id=update.message.chat_id)
         storage = context.user_data.get('Склад')
         item = context.user_data.get('Описание')
         quantity = context.user_data.get('Количество')
         period = context.user_data.get('Период')
+        period_days = periods[period]
+        today = date.today()
+        storage_date_end = today + timedelta(days=period_days)
+        storage_date_start = today.strftime("%d.%m.%Y")
         total_price = int(quantity) * prices[item][period]
         stuff = Stuff.objects.create(
         profile=profile,
@@ -287,11 +363,18 @@ def confirm(update, context):
         
 
     update.message.reply_text(
-            text='Заказ создан и успешно оплачен! Ваш код',
+            text='Заказ создан и успешно оплачен!'
+            ' Вот ваш электронный ключ для доступа к вашему личному складу. '
+            f'Вы сможете попасть на склад в любое время в период с {storage_date_start} по {storage_date_end.strftime("%d.%m.%Y")}',
         )
-    with open(filename, 'rb') as file:
+    with open(filepath, 'rb') as file:
             context.bot.send_document(chat_id=update.message.chat_id, document=file)
-    return CHOICE
+    update.message.reply_text(
+            text='Если хотите сделать еще один заказ - нажмите /start.',
+        )
+    return START
+
+
 
 
 
@@ -317,12 +400,12 @@ def unknown(update, context):
                 reply_keyboard, one_time_keyboard=True, resize_keyboard=True
         )
     )
-    return CHOICE
+    return START
 
 
 def error(bot, update, error):
     logger.error('Update "%s" caused error "%s"', update, error)
-    return CHOICE
+    return START
 
 
 
@@ -340,12 +423,14 @@ class Command(BaseCommand):
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', start)],
             states={
+                START: [CommandHandler('start', start)],
                 CHOICE: [MessageHandler(Filters.text & ~Filters.command, choice)],
                 QUANTITY: [MessageHandler(Filters.text & ~Filters.command, quantity)],
                 TITLE: [MessageHandler(Filters.text & ~Filters.command, title)],
                 SEASONAL: [MessageHandler(Filters.text & ~Filters.command, seasonal)],
                 PERIOD: [MessageHandler(Filters.text & ~Filters.command, period)],
                 BOOK: [MessageHandler(Filters.text & ~Filters.command, book)],
+                PD: [MessageHandler(Filters.text & ~Filters.command, add_pd)],
                 SURNAME: [MessageHandler(Filters.text & ~Filters.command, add_surname)],
                 PASSPORT: [MessageHandler(Filters.text & ~Filters.command, add_passport)],
                 CONTACT: [MessageHandler(Filters.text & ~Filters.command, add_contact)],
