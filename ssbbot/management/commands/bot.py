@@ -53,6 +53,7 @@ async def sklad_1_answer(message: types.Message):
 
 @dp.callback_query_handler(text='сезонные вещи')
 async def send_msg(call: types.CallbackQuery):
+    await bot.delete_message(call.from_user.id, call.message.message_id)
     await call.message.answer('yyy', reply_markup=types.ReplyKeyboardRemove())
     await call.answer()
 
